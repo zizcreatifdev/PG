@@ -13,6 +13,7 @@ import Landing from "./pages/Landing";
 import Inscription from "./pages/Inscription";
 import NotFound from "./pages/NotFound";
 import ValidatePost from "./pages/ValidatePost";
+import Setup from "./pages/Setup";
 import ContratSignature from "./pages/ContratSignature";
 import Confirmation from "./pages/Confirmation";
 
@@ -58,6 +59,7 @@ const App = () => (
             <Route path="/valider/:token" element={<ValidatePost />} />
             <Route path="/contrat/:submissionId" element={<ContratSignature />} />
             <Route path="/confirmation" element={<Confirmation />} />
+            <Route path="/setup" element={<Setup />} />
 
             {/* Admin routes */}
             <Route path="/admin" element={<ProtectedRoute allowedRoles={['admin']}><DashboardLayout /></ProtectedRoute>}>
