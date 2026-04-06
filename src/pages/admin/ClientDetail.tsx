@@ -54,6 +54,8 @@ import {
   MessageCircle,
   Linkedin,
   Globe,
+  Send,
+  RefreshCw,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -147,6 +149,8 @@ export default function ClientDetail() {
   const [shootingForm, setShootingForm] = useState({ date_shooting: '', lieu: '', nombre_photos: '' });
   const [shootingDialogOpen, setShootingDialogOpen] = useState(false);
   const [deleteStep, setDeleteStep] = useState(0);
+  const [lastOnboarding, setLastOnboarding] = useState<string | null>(null);
+  const [sendingOnboarding, setSendingOnboarding] = useState<'initial' | 'correction' | null>(null);
 
   const load = async () => {
     if (!id) return;
@@ -171,6 +175,17 @@ export default function ClientDetail() {
         .order('date_paiement', { ascending: false });
       setPayments((py as PaymentRecord[]) || []);
     }
+
+    // Last completed onboarding
+    const { data: lastTok } = await supabase
+      .from('onboarding_tokens')
+      .select('created_at')
+      .eq('client_id', id)
+      .eq('used', true)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+    setLastOnboarding(lastTok?.created_at ?? null);
   };
 
   useEffect(() => {
@@ -268,6 +283,46 @@ export default function ClientDetail() {
     setShootingForm({ date_shooting: '', lieu: '', nombre_photos: '' });
     setShootingDialogOpen(false);
     load();
+  };
+
+  const handleSendOnboarding = async (type: 'initial' | 'correction') => {
+    if (!id || !client?.email) {
+      toast.error('Email du client requis pour envoyer le lien');
+      return;
+    }
+    setSendingOnboarding(type);
+    try {
+      // Invalider les anciens tokens
+      await supabase.from('onboarding_tokens').update({ used: true }).eq('client_id', id).eq('used', false);
+      // Créer nouveau token
+      const { data: tokenData, error } = await supabase
+        .from('onboarding_tokens')
+        .insert({ client_id: id, created_by: user?.id })
+        .select('token')
+        .single();
+      if (error || !tokenData) { toast.error('Erreur génération token'); return; }
+
+      const link = `https://pg-nu-virid.vercel.app/onboarding/${tokenData.token}`;
+
+      // Envoyer email via edge function
+      const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+      const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      await fetch(`${SUPABASE_URL}/functions/v1/send-onboarding-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY },
+        body: JSON.stringify({
+          client_email: client.email,
+          client_nom: client.nom,
+          onboarding_link: link,
+          is_correction: type === 'correction',
+        }),
+      });
+
+      toast.success(`Lien ${type === 'correction' ? 'de correction' : 'd\'onboarding'} envoyé à ${client.nom}`);
+      load();
+    } finally {
+      setSendingOnboarding(null);
+    }
   };
 
   const updateField = (field: string, value: any) => {
@@ -552,6 +607,7 @@ export default function ClientDetail() {
           <Section title="Notes internes">
             <p className="text-xs text-muted-foreground font-body mb-2">
               Ces notes ne sont jamais visibles par le client.
+              {!isAdmin && <span className="ml-1 text-amber-600">Les informations financières sont réservées aux admins.</span>}
             </p>
             <Textarea
               value={form.notes_internes || ''}
@@ -636,7 +692,61 @@ export default function ClientDetail() {
         </TabsContent>
       </Tabs>
 
-      {/* Actions */}
+      {/* ─── Section Onboarding ─── */}
+      <div className="glass-card p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-heading text-base font-bold text-foreground">Onboarding</h3>
+            {lastOnboarding ? (
+              <p className="text-xs text-muted-foreground font-body mt-0.5">
+                Dernier onboarding complété le {new Date(lastOnboarding).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground font-body mt-0.5">Aucun onboarding complété pour l'instant</p>
+            )}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <Button
+            variant="outline"
+            className="gap-2 font-body text-sm"
+            disabled={sendingOnboarding !== null}
+            onClick={() => handleSendOnboarding('initial')}
+            style={{ borderColor: '#0077B640', color: '#0077B6' }}
+          >
+            <Send className="h-4 w-4" />
+            {sendingOnboarding === 'initial' ? 'Envoi…' : 'Envoyer lien onboarding'}
+          </Button>
+          <Button
+            variant="outline"
+            className="gap-2 font-body text-sm"
+            disabled={sendingOnboarding !== null}
+            onClick={() => handleSendOnboarding('correction')}
+            style={{ borderColor: '#BA751740', color: '#BA7517' }}
+          >
+            <RefreshCw className="h-4 w-4" />
+            {sendingOnboarding === 'correction' ? 'Envoi…' : 'Lien de correction'}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-2 font-body text-xs text-muted-foreground"
+            onClick={async () => {
+              if (!id) return;
+              await supabase.from('onboarding_tokens').update({ used: true }).eq('client_id', id).eq('used', false);
+              const { data: tokenData, error } = await supabase.from('onboarding_tokens').insert({ client_id: id, created_by: user?.id }).select('token').single();
+              if (error || !tokenData) { toast.error('Erreur'); return; }
+              const link = `https://pg-nu-virid.vercel.app/onboarding/${tokenData.token}`;
+              navigator.clipboard.writeText(link);
+              toast.success('Lien copié dans le presse-papier');
+            }}
+          >
+            <Link2 className="h-3.5 w-3.5" /> Copier le lien
+          </Button>
+        </div>
+      </div>
+
+      {/* Actions bas de page */}
       <div className="flex items-center gap-3 pt-4 border-t border-border">
         <Button variant="outline" className="gap-2 font-body text-sm" onClick={handleArchive}>
           <Archive className="h-4 w-4" />
@@ -657,24 +767,18 @@ export default function ClientDetail() {
                 </AlertDialogTitle>
                 <AlertDialogDescription className="font-body">
                   {deleteStep === 1
-                    ? 'Cette action supprimera le client et toutes ses données associées. Les factures non soldées bloqueront la suppression.'
-                    : `Tapez "SUPPRIMER" pour confirmer la suppression définitive de ${client.nom}.`}
+                    ? 'Cette action supprimera le client et toutes ses données. Les factures non soldées bloqueront la suppression.'
+                    : `Cette action est irréversible. Toutes les données de ${client.nom} seront supprimées.`}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel className="font-body">Annuler</AlertDialogCancel>
                 {deleteStep === 1 ? (
-                  <AlertDialogAction
-                    className="bg-destructive text-destructive-foreground font-heading"
-                    onClick={(e) => { e.preventDefault(); setDeleteStep(2); }}
-                  >
+                  <AlertDialogAction className="bg-destructive text-destructive-foreground font-heading" onClick={(e) => { e.preventDefault(); setDeleteStep(2); }}>
                     Continuer
                   </AlertDialogAction>
                 ) : (
-                  <AlertDialogAction
-                    className="bg-destructive text-destructive-foreground font-heading"
-                    onClick={handleDelete}
-                  >
+                  <AlertDialogAction className="bg-destructive text-destructive-foreground font-heading" onClick={handleDelete}>
                     Supprimer définitivement
                   </AlertDialogAction>
                 )}
@@ -682,30 +786,6 @@ export default function ClientDetail() {
             </AlertDialogContent>
           </AlertDialog>
         )}
-
-        <Button
-          variant="outline"
-          className="gap-2 font-body text-sm ml-auto"
-          onClick={async () => {
-            if (!id) return;
-            // Invalidate old tokens
-            await supabase.from('onboarding_tokens').update({ used: true }).eq('client_id', id).eq('used', false);
-            // Create new token
-            const { data: tokenData, error } = await supabase.from('onboarding_tokens').insert({
-              client_id: id,
-              created_by: user?.id,
-            }).select('token').single();
-            if (error || !tokenData) {
-              toast.error('Erreur lors de la génération du lien');
-              return;
-            }
-            const link = `${window.location.origin}/onboarding/${tokenData.token}`;
-            navigator.clipboard.writeText(link);
-            toast.success('Lien d\'onboarding copié ! Valable 24h.');
-          }}
-        >
-          <Link2 className="h-4 w-4" /> Générer lien d'onboarding
-        </Button>
       </div>
     </div>
   );

@@ -42,14 +42,25 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ valid: false, reason: 'Ce lien a expiré. Veuillez contacter votre gestionnaire Persona Genius pour obtenir un nouveau lien.' }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    return new Response(JSON.stringify({ valid: true, client_id: data.client_id }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    // Fetch existing client data for pre-fill
+    let existingClient = null;
+    if (data.client_id) {
+      const { data: cd } = await supabaseAdmin
+        .from('clients')
+        .select('nom, email, telephone, whatsapp, linkedin_url, titre_professionnel, secteur_activite, biographie, piliers_contenu, ton_voix, style_ecriture, sujets_a_eviter, objectifs_linkedin')
+        .eq('id', data.client_id)
+        .single();
+      existingClient = cd;
+    }
+
+    return new Response(JSON.stringify({ valid: true, client_id: data.client_id, client: existingClient }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
   // POST: submit onboarding
   if (req.method === 'POST') {
     try {
       const body = await req.json();
-      const { token, from_landing, nom, titre_professionnel, secteur_activite, email, telephone, whatsapp, linkedin_url, photo_url, objectifs_linkedin, piliers_contenu, ton_voix, sujets_a_eviter, biographie, formule } = body;
+      const { token, from_landing, nom, titre_professionnel, secteur_activite, email, telephone, whatsapp, linkedin_url, photo_url, objectifs_linkedin, piliers_contenu, ton_voix, style_ecriture, sujets_a_eviter, biographie, formule } = body;
 
       if (!nom || !email) {
         return new Response(JSON.stringify({ error: 'Champs requis manquants' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -124,7 +135,8 @@ Deno.serve(async (req) => {
           email: email || null, telephone: telephone || null, whatsapp: whatsapp || null,
           linkedin_url: linkedin_url || null, photo_url: photo_url || null,
           objectifs_linkedin: objectifs_linkedin || null, piliers_contenu: piliers_contenu || null,
-          ton_voix: ton_voix || null, sujets_a_eviter: sujets_a_eviter || null, biographie: biographie || null,
+          ton_voix: ton_voix || null, style_ecriture: style_ecriture || null,
+          sujets_a_eviter: sujets_a_eviter || null, biographie: biographie || null,
         }).eq('id', clientId);
       } else {
         const { data: newClient, error: insertErr } = await supabaseAdmin.from('clients').insert({

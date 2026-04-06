@@ -82,8 +82,10 @@ const App = () => (
             <Route path="/staff" element={<ProtectedRoute allowedRoles={['staff']}><DashboardLayout /></ProtectedRoute>}>
               <Route path="dashboard" element={<StaffDashboard />} />
               <Route path="clients" element={<AdminClients />} />
+              <Route path="clients/:id" element={<AdminClientDetail />} />
+              <Route path="posts" element={<AdminPosts />} />
               <Route path="calendrier" element={<AdminCalendrier />} />
-              <Route path="analytics" element={<AdminAnalytics />} />
+              <Route path="shootings" element={<AdminShootings />} />
             </Route>
 
             {/* Client routes */}

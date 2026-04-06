@@ -49,8 +49,9 @@ const adminLinks = [
 const staffLinks = [
   { title: 'Tableau de bord', url: '/staff/dashboard', icon: LayoutDashboard },
   { title: 'Clients', url: '/staff/clients', icon: Users },
+  { title: 'Posts', url: '/staff/posts', icon: FileText },
   { title: 'Calendrier', url: '/staff/calendrier', icon: CalendarDays },
-  { title: 'Analytics', url: '/staff/analytics', icon: FileText },
+  { title: 'Shootings', url: '/staff/shootings', icon: Camera },
 ];
 
 const clientLinks = [
