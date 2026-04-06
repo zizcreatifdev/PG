@@ -1,329 +1,308 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Textarea } from '@/components/ui/textarea';
-import { Label } from '@/components/ui/label';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-} from '@/components/ui/dialog';
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import { AlertTriangle, Edit3, MessageSquare, CheckCircle } from 'lucide-react';
-import { toast } from 'sonner';
-import { format, differenceInHours } from 'date-fns';
+import { Button } from '@/components/ui/button';
+import { CheckCircle2, Clock, FileCheck, BarChart3, ExternalLink, CalendarDays, ArrowRight } from 'lucide-react';
+import { format, startOfMonth, endOfMonth } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
-const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  propose: { label: 'Proposé', color: '#378ADD', bg: '#E6F1FB' },
-  modifie: { label: 'Modifié', color: '#BA7517', bg: '#FAEEDA' },
-  approuve: { label: 'Approuvé', color: '#E8533A', bg: '#FAECE7' },
-  valide: { label: 'Validé', color: '#1D9E75', bg: '#EAF3DE' },
-  poste: { label: 'Posté', color: '#03045E', bg: 'rgba(3,4,94,0.07)' },
+const FORMAT_LABELS: Record<string, string> = {
+  texte: 'Texte',
+  image: 'Image',
+  video: 'Vidéo',
+  sondage: 'Sondage',
 };
 
-type Post = {
+type PostPropose = {
   id: string;
   contenu: string;
   date_planifiee: string;
-  statut: string;
   format: string;
-  media_url: string | null;
   heure_publication: string | null;
-  created_at: string;
+};
+
+type PostPoste = {
+  id: string;
+  date_planifiee: string;
+  format: string;
+  contenu: string;
+};
+
+type KPIs = {
+  validesComois: number;
+  prochainPost: { date: string; format: string } | null;
+  enAttente: number;
+  totalPoste: number;
 };
 
 export default function ClientDashboard() {
   const { user } = useAuth();
-  const [posts, setPosts] = useState<Post[]>([]);
+  const navigate = useNavigate();
   const [clientId, setClientId] = useState<string | null>(null);
-
-  // Edit state
-  const [editPost, setEditPost] = useState<Post | null>(null);
-  const [editContenu, setEditContenu] = useState('');
-
-  // Comment state
-  const [commentPost, setCommentPost] = useState<Post | null>(null);
-  const [commentText, setCommentText] = useState('');
-
-  // Approve state
-  const [approvePost, setApprovePost] = useState<Post | null>(null);
+  const [kpis, setKpis] = useState<KPIs>({ validesComois: 0, prochainPost: null, enAttente: 0, totalPoste: 0 });
+  const [postsAValider, setPostsAValider] = useState<PostPropose[]>([]);
+  const [postsPublies, setPostsPublies] = useState<PostPoste[]>([]);
+  const [loadingToken, setLoadingToken] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!user) return;
     const { data: clientData } = await supabase.from('clients').select('id').eq('user_id', user.id).single();
     if (!clientData) return;
-    setClientId(clientData.id);
+    const cid = clientData.id;
+    setClientId(cid);
 
-    const { data } = await supabase
-      .from('posts')
-      .select('id, contenu, date_planifiee, statut, format, media_url, heure_publication, created_at')
-      .eq('client_id', clientData.id)
-      .eq('statut', 'propose' as any)
-      .order('date_planifiee');
-    setPosts((data as Post[]) || []);
+    const now = new Date();
+    const monthStart = startOfMonth(now).toISOString();
+    const monthEnd = endOfMonth(now).toISOString();
+
+    const [
+      { data: validesData },
+      { data: prochainData },
+      { data: proposeData },
+      { data: posteCountData },
+      { data: posteData },
+    ] = await Promise.all([
+      // Posts validés ce mois (statut = valide ou poste, date dans le mois)
+      supabase
+        .from('posts')
+        .select('id', { count: 'exact' })
+        .eq('client_id', cid)
+        .in('statut', ['valide', 'poste'] as any[])
+        .gte('date_planifiee', monthStart.slice(0, 10))
+        .lte('date_planifiee', monthEnd.slice(0, 10)),
+      // Prochain post planifié
+      supabase
+        .from('posts')
+        .select('date_planifiee, format')
+        .eq('client_id', cid)
+        .in('statut', ['valide', 'propose'] as any[])
+        .gte('date_planifiee', now.toISOString().slice(0, 10))
+        .order('date_planifiee', { ascending: true })
+        .limit(1),
+      // Posts en attente de validation
+      supabase
+        .from('posts')
+        .select('id, contenu, date_planifiee, format, heure_publication')
+        .eq('client_id', cid)
+        .eq('statut', 'propose' as any)
+        .order('date_planifiee', { ascending: true }),
+      // Total posts publiés
+      supabase
+        .from('posts')
+        .select('id', { count: 'exact' })
+        .eq('client_id', cid)
+        .eq('statut', 'poste' as any),
+      // 5 derniers posts publiés
+      supabase
+        .from('posts')
+        .select('id, date_planifiee, format, contenu')
+        .eq('client_id', cid)
+        .eq('statut', 'poste' as any)
+        .order('date_planifiee', { ascending: false })
+        .limit(5),
+    ]);
+
+    setKpis({
+      validesComois: validesData?.length ?? 0,
+      prochainPost: prochainData?.[0] ? { date: prochainData[0].date_planifiee, format: prochainData[0].format } : null,
+      enAttente: proposeData?.length ?? 0,
+      totalPoste: posteCountData?.length ?? 0,
+    });
+    setPostsAValider((proposeData as PostPropose[]) || []);
+    setPostsPublies((posteData as PostPoste[]) || []);
   }, [user]);
 
   useEffect(() => { load(); }, [load]);
 
-  // Urgent posts (proposed > 48h ago)
-  const urgentPosts = posts.filter(p => {
-    return differenceInHours(new Date(), new Date(p.created_at)) > 48;
-  });
-
-  // ── Edit (inline text only) ──
-  const handleSaveEdit = async () => {
-    if (!editPost) return;
-    const { error } = await supabase.from('posts').update({ contenu: editContenu, statut: 'modifie' as any }).eq('id', editPost.id);
-    if (error) { toast.error('Erreur'); return; }
-    // Notify admin
-    const { data: admins } = await supabase.from('user_roles').select('user_id').eq('role', 'admin');
-    if (admins) {
-      for (const a of admins) {
-        await supabase.from('notifications').insert({
-          user_id: a.user_id,
-          title: 'Post modifié par le client',
-          message: `Le client a modifié le contenu d'un post programmé le ${format(new Date(editPost.date_planifiee), 'd MMM yyyy', { locale: fr })}.`,
-        });
+  const handleVoirEtValider = async (postId: string) => {
+    setLoadingToken(postId);
+    try {
+      const { data } = await supabase
+        .from('post_validation_tokens')
+        .select('token')
+        .eq('post_id', postId)
+        .eq('used', false)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+      if (data?.token) {
+        navigate(`/valider/${data.token}`);
+      } else {
+        // No valid token available — show info
+        navigate(`/valider/no-token`);
       }
+    } finally {
+      setLoadingToken(null);
     }
-    toast.success('Modifications enregistrées');
-    setEditPost(null);
-    load();
-  };
-
-  // ── Comment ──
-  const handleSendComment = async () => {
-    if (!commentPost || !commentText.trim()) return;
-    const { data: admins } = await supabase.from('user_roles').select('user_id').eq('role', 'admin');
-    if (admins) {
-      for (const a of admins) {
-        await supabase.from('notifications').insert({
-          user_id: a.user_id,
-          title: 'Commentaire client sur un post',
-          message: `Commentaire sur le post du ${format(new Date(commentPost.date_planifiee), 'd MMM yyyy', { locale: fr })} : "${commentText}"`,
-        });
-      }
-    }
-    toast.success('Commentaire envoyé');
-    setCommentPost(null);
-    setCommentText('');
-  };
-
-  // ── Approve ──
-  const handleApprove = async () => {
-    if (!approvePost) return;
-    const { error } = await supabase.from('posts').update({ statut: 'approuve' as any }).eq('id', approvePost.id);
-    if (error) { toast.error('Erreur'); return; }
-    const { data: admins } = await supabase.from('user_roles').select('user_id').eq('role', 'admin');
-    if (admins) {
-      for (const a of admins) {
-        await supabase.from('notifications').insert({
-          user_id: a.user_id,
-          title: 'Post approuvé',
-          message: `Le client a approuvé le post programmé le ${format(new Date(approvePost.date_planifiee), 'd MMM yyyy', { locale: fr })}.`,
-        });
-      }
-    }
-    toast.success('Post approuvé !');
-    setApprovePost(null);
-    load();
-  };
-
-  const scrollToPost = (postId: string) => {
-    document.getElementById(`post-${postId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Header */}
       <div>
-        <h1 className="font-heading text-2xl sm:text-3xl font-bold text-foreground">Mes posts</h1>
-        <p className="text-muted-foreground font-body mt-1">Posts en attente de votre validation</p>
+        <h1 className="font-heading text-2xl sm:text-3xl font-bold text-foreground">Mon tableau de bord</h1>
+        <p className="text-muted-foreground font-body mt-1 text-sm">Bienvenue dans votre espace PersonaGenius</p>
       </div>
 
-      {/* Urgent banner */}
-      {urgentPosts.length > 0 && (
-        <div className="rounded-xl p-4 flex items-start gap-3" style={{ backgroundColor: '#FAEEDA', border: '1px solid #D9770640' }}>
-          <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5" style={{ color: '#D97706' }} />
-          <div className="flex-1">
-            <p className="font-heading font-semibold text-sm" style={{ color: '#D97706' }}>
-              {urgentPosts.length} post(s) en attente depuis plus de 48h
-            </p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {urgentPosts.map(p => (
-                <Button
-                  key={p.id}
-                  size="sm"
-                  variant="outline"
-                  className="text-xs font-heading"
-                  style={{ borderColor: '#D97706', color: '#D97706' }}
-                  onClick={() => scrollToPost(p.id)}
-                >
-                  {p.contenu.substring(0, 30)}... — Voir maintenant
-                </Button>
-              ))}
+      {/* ── KPI Cards ── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Posts validés ce mois */}
+        <div className="glass-card p-5 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-body text-muted-foreground">Validés ce mois</span>
+            <div className="h-9 w-9 rounded-full flex items-center justify-center" style={{ backgroundColor: 'rgba(141,197,0,0.12)' }}>
+              <CheckCircle2 className="h-5 w-5" style={{ color: '#8FC500' }} />
             </div>
           </div>
+          <p className="text-3xl font-heading font-bold" style={{ color: '#03045E' }}>{kpis.validesComois}</p>
+          <p className="text-xs font-body text-muted-foreground">Posts approuvés pour {format(new Date(), 'MMMM yyyy', { locale: fr })}</p>
         </div>
-      )}
 
-      {/* Posts list */}
-      {posts.length === 0 ? (
-        <div className="glass-card p-12 text-center">
-          <CheckCircle className="h-12 w-12 mx-auto text-muted-foreground/30 mb-4" />
-          <p className="font-heading text-lg font-semibold text-foreground">Aucun post en attente</p>
-          <p className="text-sm text-muted-foreground font-body mt-1">Tous vos posts ont été traités ✨</p>
+        {/* Prochain post planifié */}
+        <div className="glass-card p-5 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-body text-muted-foreground">Prochain post</span>
+            <div className="h-9 w-9 rounded-full flex items-center justify-center" style={{ backgroundColor: 'rgba(0,119,182,0.1)' }}>
+              <CalendarDays className="h-5 w-5" style={{ color: '#0077B6' }} />
+            </div>
+          </div>
+          {kpis.prochainPost ? (
+            <>
+              <p className="text-xl font-heading font-bold" style={{ color: '#03045E' }}>
+                {format(new Date(kpis.prochainPost.date), 'd MMM', { locale: fr })}
+              </p>
+              <Badge className="w-fit font-body text-xs border-0" style={{ backgroundColor: 'rgba(0,119,182,0.1)', color: '#0077B6' }}>
+                {FORMAT_LABELS[kpis.prochainPost.format] || kpis.prochainPost.format}
+              </Badge>
+            </>
+          ) : (
+            <p className="text-base font-heading font-medium text-muted-foreground">Aucun planifié</p>
+          )}
         </div>
-      ) : (
-        <div className="space-y-4">
-          {posts.map(post => {
-            const cfg = STATUS_CONFIG[post.statut] || STATUS_CONFIG.propose;
-            const isUrgent = differenceInHours(new Date(), new Date(post.created_at)) > 48;
-            return (
+
+        {/* Posts en attente */}
+        <div className="glass-card p-5 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-body text-muted-foreground">En attente</span>
+            <div className="h-9 w-9 rounded-full flex items-center justify-center" style={{ backgroundColor: kpis.enAttente > 0 ? 'rgba(217,119,6,0.1)' : 'rgba(0,0,0,0.05)' }}>
+              <Clock className="h-5 w-5" style={{ color: kpis.enAttente > 0 ? '#D97706' : 'rgba(0,0,0,0.3)' }} />
+            </div>
+          </div>
+          <p className="text-3xl font-heading font-bold" style={{ color: kpis.enAttente > 0 ? '#D97706' : '#03045E' }}>
+            {kpis.enAttente}
+          </p>
+          <p className="text-xs font-body text-muted-foreground">Post(s) en attente de votre validation</p>
+        </div>
+
+        {/* Total publiés */}
+        <div className="glass-card p-5 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-body text-muted-foreground">Total publiés</span>
+            <div className="h-9 w-9 rounded-full flex items-center justify-center" style={{ backgroundColor: 'rgba(3,4,94,0.08)' }}>
+              <BarChart3 className="h-5 w-5" style={{ color: '#03045E' }} />
+            </div>
+          </div>
+          <p className="text-3xl font-heading font-bold" style={{ color: '#03045E' }}>{kpis.totalPoste}</p>
+          <p className="text-xs font-body text-muted-foreground">Posts publiés sur LinkedIn</p>
+        </div>
+      </div>
+
+      {/* ── À valider maintenant ── */}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-heading text-lg font-bold text-foreground">À valider maintenant</h2>
+          {kpis.enAttente > 0 && (
+            <Badge className="font-body text-xs border-0" style={{ backgroundColor: 'rgba(217,119,6,0.12)', color: '#D97706' }}>
+              {kpis.enAttente} en attente
+            </Badge>
+          )}
+        </div>
+
+        {postsAValider.length === 0 ? (
+          <div className="glass-card p-10 text-center">
+            <FileCheck className="h-10 w-10 mx-auto text-muted-foreground/25 mb-3" />
+            <p className="font-heading font-semibold text-foreground">Aucun post en attente</p>
+            <p className="text-sm text-muted-foreground font-body mt-1">Tous vos posts ont été traités ✨</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {postsAValider.map(post => (
               <div
                 key={post.id}
-                id={`post-${post.id}`}
-                className="glass-card p-5 space-y-4 transition-all"
-                style={isUrgent ? { borderColor: '#D97706', borderWidth: '2px' } : {}}
+                className="glass-card p-4 flex flex-col sm:flex-row sm:items-center gap-4"
+                style={{ borderLeft: '3px solid #D97706' }}
               >
-                {/* Top row */}
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Badge className="font-body text-xs border-0" style={{ backgroundColor: cfg.bg, color: cfg.color }}>
-                      {cfg.label}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <Badge className="font-body text-[10px] border-0" style={{ backgroundColor: '#E6F1FB', color: '#378ADD' }}>
+                      Proposé
                     </Badge>
-                    <span className="text-sm text-muted-foreground font-body">
+                    <span className="text-xs font-body text-muted-foreground">
                       {format(new Date(post.date_planifiee), 'd MMMM yyyy', { locale: fr })}
+                      {post.heure_publication && ` à ${format(new Date(post.heure_publication), 'HH:mm')}`}
                     </span>
-                    {post.heure_publication && (
-                      <span className="text-xs text-muted-foreground font-body">
-                        à {format(new Date(post.heure_publication), 'HH:mm')}
-                      </span>
-                    )}
-                  </div>
-                  {isUrgent && (
-                    <Badge className="font-body text-[10px] border-0 gap-1" style={{ backgroundColor: '#FAEEDA', color: '#D97706' }}>
-                      <AlertTriangle className="h-3 w-3" /> Urgent
+                    <Badge className="font-body text-[10px] border-0" style={{ backgroundColor: 'rgba(0,0,0,0.06)', color: 'rgba(0,0,0,0.5)' }}>
+                      {FORMAT_LABELS[post.format] || post.format}
                     </Badge>
+                  </div>
+                  <p className="font-body text-sm text-foreground line-clamp-2 leading-relaxed">
+                    {post.contenu || 'Contenu du post…'}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  className="font-heading font-semibold gap-1.5 text-white shrink-0"
+                  style={{ backgroundColor: '#0077B6' }}
+                  disabled={loadingToken === post.id}
+                  onClick={() => handleVoirEtValider(post.id)}
+                >
+                  {loadingToken === post.id ? 'Chargement…' : (
+                    <>Voir et valider <ArrowRight className="h-3.5 w-3.5" /></>
                   )}
-                </div>
-
-                {/* Content preview */}
-                <div className="rounded-lg p-4 bg-muted/30">
-                  <p className="font-body text-sm text-foreground whitespace-pre-wrap line-clamp-6">{post.contenu || 'Contenu du post...'}</p>
-                </div>
-
-                {post.media_url && (
-                  <img src={post.media_url} alt="" className="rounded-lg max-h-48 object-cover" />
-                )}
-
-                {/* Action buttons */}
-                <div className="flex flex-wrap items-center gap-2 sm:gap-3 pt-1">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="font-heading font-semibold gap-1.5"
-                    onClick={() => { setEditPost(post); setEditContenu(post.contenu); }}
-                  >
-                    <Edit3 className="h-3.5 w-3.5" /> Modifier
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="font-heading font-semibold gap-1.5"
-                    onClick={() => setCommentPost(post)}
-                  >
-                    <MessageSquare className="h-3.5 w-3.5" /> Commenter
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="font-heading font-semibold gap-1.5 text-white"
-                    style={{ backgroundColor: '#1D9E75' }}
-                    onClick={() => setApprovePost(post)}
-                  >
-                    <CheckCircle className="h-3.5 w-3.5" /> Approuver
-                  </Button>
-                </div>
+                </Button>
               </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Edit dialog */}
-      <Dialog open={!!editPost} onOpenChange={o => { if (!o) setEditPost(null); }}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="font-heading">Modifier le contenu</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 mt-2">
-            <p className="text-xs text-muted-foreground font-body">
-              Vous pouvez modifier le texte. Le format et les médias restent inchangés.
-            </p>
-            <Textarea
-              value={editContenu}
-              onChange={e => setEditContenu(e.target.value)}
-              rows={8}
-              className="font-body"
-            />
+            ))}
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditPost(null)}>Annuler</Button>
-            <Button className="font-heading text-white" style={{ backgroundColor: '#03045E' }} onClick={handleSaveEdit}>
-              Enregistrer les modifications
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        )}
+      </div>
 
-      {/* Comment dialog */}
-      <Dialog open={!!commentPost} onOpenChange={o => { if (!o) { setCommentPost(null); setCommentText(''); } }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="font-heading">Ajouter un commentaire</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 mt-2">
-            <p className="text-xs text-muted-foreground font-body">
-              Votre commentaire sera envoyé à votre gestionnaire de compte.
-            </p>
-            <Textarea
-              value={commentText}
-              onChange={e => setCommentText(e.target.value)}
-              rows={4}
-              placeholder="Écrivez votre commentaire ici..."
-              className="font-body"
-            />
+      {/* ── Récemment publiés ── */}
+      <div>
+        <h2 className="font-heading text-lg font-bold text-foreground mb-4">Récemment publiés</h2>
+
+        {postsPublies.length === 0 ? (
+          <div className="glass-card p-10 text-center">
+            <ExternalLink className="h-10 w-10 mx-auto text-muted-foreground/25 mb-3" />
+            <p className="font-heading font-semibold text-foreground">Aucun post publié pour l'instant</p>
+            <p className="text-sm text-muted-foreground font-body mt-1">Vos publications apparaîtront ici.</p>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setCommentPost(null); setCommentText(''); }}>Annuler</Button>
-            <Button className="font-heading text-white" style={{ backgroundColor: '#0077B6' }} onClick={handleSendComment} disabled={!commentText.trim()}>
-              Envoyer
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Approve confirmation */}
-      <AlertDialog open={!!approvePost} onOpenChange={() => setApprovePost(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="font-heading">Approuver ce post ?</AlertDialogTitle>
-            <AlertDialogDescription className="font-body">
-              Une fois approuvé, votre gestionnaire pourra programmer la publication définitive.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel className="font-heading">Annuler</AlertDialogCancel>
-            <AlertDialogAction className="font-heading text-white" style={{ backgroundColor: '#1D9E75' }} onClick={handleApprove}>
-              Approuver
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        ) : (
+          <div className="glass-card overflow-hidden">
+            {postsPublies.map((post, i) => (
+              <div
+                key={post.id}
+                className="flex items-center gap-4 p-4"
+                style={i < postsPublies.length - 1 ? { borderBottom: '1px solid rgba(0,0,0,0.06)' } : {}}
+              >
+                <div className="h-9 w-9 rounded-full shrink-0 flex items-center justify-center" style={{ backgroundColor: 'rgba(3,4,94,0.08)' }}>
+                  <ExternalLink className="h-4 w-4" style={{ color: '#03045E' }} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-body text-sm text-foreground truncate">{post.contenu || '—'}</p>
+                  <p className="text-xs text-muted-foreground font-body mt-0.5">
+                    {format(new Date(post.date_planifiee), 'd MMM yyyy', { locale: fr })}
+                  </p>
+                </div>
+                <Badge className="font-body text-[10px] border-0 shrink-0" style={{ backgroundColor: 'rgba(3,4,94,0.07)', color: '#03045E' }}>
+                  {FORMAT_LABELS[post.format] || post.format}
+                </Badge>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -19,7 +19,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Plus, Eye, Search, Upload, Link2, FileText } from 'lucide-react';
+import { Plus, Eye, Search, Upload, Link2, FileText, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
@@ -56,7 +56,7 @@ type Post = {
   clients?: { nom: string; photo_url: string | null; titre_professionnel: string | null } | null;
 };
 
-type Client = { id: string; nom: string; photo_url: string | null; titre_professionnel: string | null };
+type Client = { id: string; nom: string; photo_url: string | null; titre_professionnel: string | null; email: string | null };
 
 export default function AdminPosts() {
   const { user, role } = useAuth();
@@ -66,6 +66,7 @@ export default function AdminPosts() {
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterClient, setFilterClient] = useState('all');
   const [open, setOpen] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState<string | null>(null);
   const [previewPost, setPreviewPost] = useState<Post | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ postId: string; newStatus: string; label: string } | null>(null);
 
@@ -85,7 +86,7 @@ export default function AdminPosts() {
   const load = async () => {
     const [{ data: p }, { data: c }] = await Promise.all([
       supabase.from('posts').select('*, clients(nom, photo_url, titre_professionnel)').order('date_planifiee', { ascending: false }),
-      supabase.from('clients').select('id, nom, photo_url, titre_professionnel').eq('statut', 'actif'),
+      supabase.from('clients').select('id, nom, photo_url, titre_professionnel, email').eq('statut', 'actif'),
     ]);
     setPosts((p as Post[]) || []);
     setClients((c as Client[]) || []);
@@ -170,6 +171,60 @@ export default function AdminPosts() {
     resetForm();
     load();
     setUploading(false);
+  };
+
+  // ── Send to client (brouillon → propose + email) ──
+  const handleSendToClient = async (post: Post) => {
+    const client = clients.find(c => c.id === post.client_id);
+    if (!client?.email) {
+      toast.error('Email du client introuvable');
+      return;
+    }
+    setSendingEmail(post.id);
+    try {
+      // Invalidate previous tokens
+      await supabase.from('post_validation_tokens').update({ used: true }).eq('post_id', post.id).eq('used', false);
+      // Create new token
+      const { data: tokenData, error: tokenErr } = await supabase
+        .from('post_validation_tokens')
+        .insert({ post_id: post.id })
+        .select('token')
+        .single();
+      if (tokenErr || !tokenData) { toast.error('Erreur création token'); return; }
+
+      // Update status to propose
+      await supabase.from('posts').update({ statut: 'propose' as any }).eq('id', post.id);
+
+      // Notify client in-app
+      const { data: clientData } = await supabase.from('clients').select('user_id').eq('id', post.client_id).single();
+      if (clientData?.user_id) {
+        await supabase.from('notifications').insert({
+          user_id: clientData.user_id,
+          title: 'Nouveau post à valider',
+          message: `Un nouveau post vous a été envoyé pour validation. Cliquez pour le consulter.`,
+        });
+      }
+
+      // Send email via edge function
+      const validationLink = `https://pg-nu-virid.vercel.app/valider/${tokenData.token}`;
+      const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+      const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      await fetch(`${SUPABASE_URL}/functions/v1/send-validation-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY },
+        body: JSON.stringify({
+          client_email: client.email,
+          client_nom: client.nom,
+          validation_link: validationLink,
+          post_preview: post.contenu.slice(0, 120),
+        }),
+      });
+
+      toast.success(`Lien envoyé à ${client.nom}`);
+      load();
+    } finally {
+      setSendingEmail(null);
+    }
   };
 
   const resetForm = () => {
@@ -455,24 +510,38 @@ export default function AdminPosts() {
                       >
                         <Eye className="h-4 w-4" />
                       </Button>
-                      {(post.statut === 'propose' || post.statut === 'brouillon') && (
+                      {post.statut === 'brouillon' && (
                         <Button
                           size="sm"
                           variant="ghost"
-                          title="Lien de validation"
+                          title="Envoyer au client"
+                          disabled={sendingEmail === post.id}
+                          onClick={() => handleSendToClient(post)}
+                          className="gap-1 text-xs font-heading"
+                          style={{ color: '#0077B6' }}
+                        >
+                          <Send className="h-4 w-4" />
+                          <span className="hidden sm:inline">Envoyer au client</span>
+                        </Button>
+                      )}
+                      {post.statut === 'propose' && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          title="Copier le lien de validation"
                           onClick={async () => {
-                            // Invalidate previous tokens
-                            await (supabase as any).from('post_validation_tokens').update({ used: true }).eq('post_id', post.id).eq('used', false);
-                            // Create new token
-                            const { data: tokenData, error } = await (supabase as any)
+                            const { data: tokenData, error } = await supabase
                               .from('post_validation_tokens')
-                              .insert({ post_id: post.id, created_by: user?.id })
                               .select('token')
+                              .eq('post_id', post.id)
+                              .eq('used', false)
+                              .order('created_at', { ascending: false })
+                              .limit(1)
                               .single();
-                            if (error || !tokenData) { toast.error('Erreur'); return; }
-                            const link = `${window.location.origin}/valider/${tokenData.token}`;
+                            if (error || !tokenData) { toast.error('Aucun lien actif'); return; }
+                            const link = `https://pg-nu-virid.vercel.app/valider/${tokenData.token}`;
                             await navigator.clipboard.writeText(link);
-                            toast.success('Lien copié dans le presse-papier !');
+                            toast.success('Lien copié !');
                           }}
                         >
                           <Link2 className="h-4 w-4" />

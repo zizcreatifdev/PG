@@ -580,6 +580,41 @@ export type Database = {
           },
         ]
       }
+      post_validation_tokens: {
+        Row: {
+          id: string
+          post_id: string
+          token: string
+          expires_at: string
+          used: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          post_id: string
+          token?: string
+          expires_at?: string
+          used?: boolean
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          post_id?: string
+          token?: string
+          expires_at?: string
+          used?: boolean
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "post_validation_tokens_post_id_fkey"
+            columns: ["post_id"]
+            isOneToOne: false
+            referencedRelation: "posts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       posts: {
         Row: {
           client_id: string

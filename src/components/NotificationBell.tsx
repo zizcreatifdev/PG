@@ -7,7 +7,7 @@ import {
   Popover, PopoverContent, PopoverTrigger,
 } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { format } from 'date-fns';
+import { formatDistanceToNow } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
 type Notification = {
@@ -97,7 +97,7 @@ export default function NotificationBell() {
                     <p className="text-sm font-heading font-semibold text-foreground">{n.title}</p>
                     <p className="text-xs font-body text-muted-foreground mt-0.5 line-clamp-2">{n.message}</p>
                     <p className="text-[10px] font-body text-muted-foreground/60 mt-1">
-                      {format(new Date(n.created_at), "d MMM à HH:mm", { locale: fr })}
+                      il y a {formatDistanceToNow(new Date(n.created_at), { locale: fr })}
                     </p>
                   </div>
                 </div>
