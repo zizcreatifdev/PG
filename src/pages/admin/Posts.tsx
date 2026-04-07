@@ -19,7 +19,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Plus, Eye, Search, Upload, Link2, FileText } from 'lucide-react';
+import { Plus, Eye, Search, Upload, Link2, FileText, Images } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
@@ -38,6 +38,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }
 const FORMAT_OPTIONS = [
   { value: 'texte', label: 'Texte seul' },
   { value: 'image', label: 'Texte + Image' },
+  { value: 'carrousel', label: 'Carrousel' },
   { value: 'video', label: 'Vidéo courte' },
   { value: 'sondage', label: 'Sondage LinkedIn' },
 ];
@@ -80,7 +81,10 @@ export default function AdminPosts() {
     sondage_options: ['', '', '', ''],
   });
   const [mediaFile, setMediaFile] = useState<File | null>(null);
+  const [mediaFromBank, setMediaFromBank] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [bankModal, setBankModal] = useState(false);
+  const [bankImages, setBankImages] = useState<{ id: string; image_url: string }[]>([]);
 
   const load = async () => {
     const [{ data: p }, { data: c }] = await Promise.all([
@@ -123,8 +127,8 @@ export default function AdminPosts() {
       return;
     }
     setUploading(true);
-    let mediaUrl: string | null = null;
-    if (mediaFile) {
+    let mediaUrl: string | null = mediaFromBank || null;
+    if (!mediaUrl && mediaFile) {
       mediaUrl = await uploadMedia(mediaFile);
       if (!mediaUrl) { setUploading(false); return; }
     }
@@ -175,6 +179,15 @@ export default function AdminPosts() {
   const resetForm = () => {
     setForm({ client_id: '', contenu: '', date_planifiee: '', heure: '', format: 'texte', sondage_question: '', sondage_options: ['', '', '', ''] });
     setMediaFile(null);
+    setMediaFromBank(null);
+  };
+
+  const openBankModal = async () => {
+    if (!form.client_id) { toast.error('Sélectionnez d\'abord un client'); return; }
+    const { data } = await supabase.from('client_images').select('id, image_url')
+      .eq('client_id', form.client_id).is('used_in_post_id', null).order('created_at', { ascending: false });
+    setBankImages(data || []);
+    setBankModal(true);
   };
 
   // ── Status transitions ──
@@ -274,25 +287,35 @@ export default function AdminPosts() {
               </div>
 
               {/* Media upload */}
-              {(form.format === 'image' || form.format === 'video') && (
+              {(form.format === 'image' || form.format === 'carrousel' || form.format === 'video') && (
                 <div className="space-y-2">
                   <Label className="font-heading font-semibold">
-                    {form.format === 'image' ? 'Image' : 'Vidéo'}
+                    {form.format === 'video' ? 'Vidéo' : 'Image / Visuel'}
                   </Label>
-                  <div className="flex items-center gap-3">
-                    <label className="flex items-center gap-2 px-4 py-2 rounded-lg border border-dashed border-border cursor-pointer hover:bg-muted/50 transition">
-                      <Upload className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm font-body text-muted-foreground">
-                        {mediaFile ? mediaFile.name : 'Choisir un fichier'}
-                      </span>
-                      <input
-                        type="file"
-                        className="hidden"
-                        accept={form.format === 'image' ? 'image/*' : 'video/*'}
-                        onChange={e => setMediaFile(e.target.files?.[0] || null)}
-                      />
-                    </label>
-                  </div>
+                  {mediaFromBank ? (
+                    <div className="flex items-center gap-3">
+                      <img src={mediaFromBank} alt="" className="h-16 w-16 rounded-lg object-cover border" />
+                      <div className="flex-1">
+                        <p className="text-sm font-body text-muted-foreground">Image sélectionnée depuis la banque</p>
+                        <button onClick={() => setMediaFromBank(null)} className="text-xs text-destructive hover:underline mt-1">Retirer</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-2">
+                      {form.format !== 'video' && (
+                        <Button type="button" variant="outline" size="sm" onClick={openBankModal} className="gap-2 font-heading">
+                          <Images className="h-4 w-4" /> Choisir depuis la banque
+                        </Button>
+                      )}
+                      <label className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-dashed border-border cursor-pointer hover:bg-muted/50 transition text-sm font-body text-muted-foreground">
+                        <Upload className="h-4 w-4" />
+                        {mediaFile ? mediaFile.name : 'Ou uploader un fichier'}
+                        <input type="file" className="hidden"
+                          accept={form.format === 'video' ? 'video/*' : 'image/*'}
+                          onChange={e => setMediaFile(e.target.files?.[0] || null)} />
+                      </label>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -536,6 +559,36 @@ export default function AdminPosts() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Image bank modal */}
+      <Dialog open={bankModal} onOpenChange={setBankModal}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="font-heading">Banque d'images — images disponibles</DialogTitle>
+          </DialogHeader>
+          {bankImages.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
+              <Images className="h-10 w-10 opacity-30" />
+              <p className="font-body text-sm">Aucune image disponible pour ce client</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 mt-2">
+              {bankImages.map(img => (
+                <button
+                  key={img.id}
+                  onClick={() => { setMediaFromBank(img.image_url); setMediaFile(null); setBankModal(false); toast.success('Image sélectionnée'); }}
+                  className="relative rounded-xl overflow-hidden border-2 border-transparent hover:border-[#8FC500] transition group"
+                >
+                  <img src={img.image_url} alt="" className="w-full aspect-square object-cover" />
+                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition flex items-center justify-center">
+                    <span className="opacity-0 group-hover:opacity-100 text-white text-xs font-heading font-bold bg-black/60 px-2 py-1 rounded">Sélectionner</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

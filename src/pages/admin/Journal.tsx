@@ -6,7 +6,8 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Download, FileText, Camera, Users, Image, Send, Filter } from 'lucide-react';
+import { Download, FileText, Camera, Users, Image, Send, Filter, ChevronLeft, ChevronRight } from 'lucide-react';
+import * as XLSX from 'xlsx';
 
 type LogEntry = {
   id: string;
@@ -24,11 +25,16 @@ const actionConfig: Record<string, { label: string; color: string; bg: string; i
   post_create: { label: 'Post créé', color: '#0077B6', bg: '#E6F1FB', icon: FileText },
   post_update: { label: 'Post modifié', color: '#023E8A', bg: '#E8EBF6', icon: FileText },
   post_validate: { label: 'Validation envoyée', color: '#8FC500', bg: '#F4F9E6', icon: Send },
+  post_status: { label: 'Statut modifié', color: '#BA7517', bg: '#FAEEDA', icon: FileText },
   shooting_plan: { label: 'Shooting planifié', color: '#BA7517', bg: '#FAEEDA', icon: Camera },
   client_update: { label: 'Client modifié', color: '#6B7280', bg: '#F3F4F6', icon: Users },
+  client_create: { label: 'Client créé', color: '#16A34A', bg: '#F0FDF4', icon: Users },
   image_upload: { label: 'Images uploadées', color: '#16A34A', bg: '#F0FDF4', icon: Image },
+  invoice_create: { label: 'Facture créée', color: '#7C3AED', bg: '#EDE9FE', icon: FileText },
   autre: { label: 'Action', color: '#6B7280', bg: '#F3F4F6', icon: FileText },
 };
+
+const PAGE_SIZE = 25;
 
 export default function AdminJournal() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -37,12 +43,13 @@ export default function AdminJournal() {
   const [filterType, setFilterType] = useState('all');
   const [filterFrom, setFilterFrom] = useState('');
   const [filterTo, setFilterTo] = useState('');
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     (async () => {
       const [{ data: logData }, { data: staffRoles }] = await Promise.all([
-        supabase.from('activity_log').select('*').order('created_at', { ascending: false }).limit(500),
-        supabase.from('user_roles').select('user_id').eq('role', 'staff'),
+        supabase.from('activity_log').select('*').order('created_at', { ascending: false }).limit(1000),
+        supabase.from('user_roles').select('user_id').in('role', ['staff', 'admin']),
       ]);
       setLogs((logData as LogEntry[]) || []);
 
@@ -55,6 +62,7 @@ export default function AdminJournal() {
   }, []);
 
   const filteredLogs = useMemo(() => {
+    setPage(1);
     return logs.filter(l => {
       if (filterUser !== 'all' && l.user_id !== filterUser) return false;
       if (filterType !== 'all' && l.action_type !== filterType) return false;
@@ -63,6 +71,9 @@ export default function AdminJournal() {
       return true;
     });
   }, [logs, filterUser, filterType, filterFrom, filterTo]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredLogs.length / PAGE_SIZE));
+  const pageLogs = filteredLogs.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const getInitials = (name: string) => {
     const parts = name.trim().split(/\s+/);
@@ -74,15 +85,28 @@ export default function AdminJournal() {
     return date.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' }) + ' à ' + date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
   };
 
+  const exportCSV = () => {
+    const rows = filteredLogs.map(l => ({
+      Date: formatDate(l.created_at),
+      Collaborateur: l.user_name,
+      Action: actionConfig[l.action_type]?.label || l.action_type,
+      Détail: l.description,
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Journal');
+    XLSX.writeFile(wb, `journal-activite-${new Date().toISOString().slice(0, 10)}.csv`, { bookType: 'csv' });
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="font-heading text-2xl sm:text-3xl font-bold text-foreground">Journal d'activité Staff</h1>
+          <h1 className="font-heading text-2xl sm:text-3xl font-bold text-foreground">Journal d'activité</h1>
           <p className="text-muted-foreground font-body mt-1 text-sm">{filteredLogs.length} action{filteredLogs.length !== 1 ? 's' : ''} enregistrée{filteredLogs.length !== 1 ? 's' : ''}</p>
         </div>
-        <Button variant="outline" disabled className="gap-2 opacity-50 w-full sm:w-auto">
-          <Download className="h-4 w-4" /> Export CSV <Badge variant="outline" className="ml-1 text-[10px]">V2</Badge>
+        <Button variant="outline" onClick={exportCSV} className="gap-2 w-full sm:w-auto">
+          <Download className="h-4 w-4" /> Exporter CSV
         </Button>
       </div>
 
@@ -109,13 +133,18 @@ export default function AdminJournal() {
           </SelectContent>
         </Select>
         <div className="flex items-center gap-2">
-          <Input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} className="w-40" placeholder="Du" />
+          <Input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} className="w-40" />
           <span className="text-muted-foreground text-sm">→</span>
-          <Input type="date" value={filterTo} onChange={e => setFilterTo(e.target.value)} className="w-40" placeholder="Au" />
+          <Input type="date" value={filterTo} onChange={e => setFilterTo(e.target.value)} className="w-40" />
         </div>
+        {(filterUser !== 'all' || filterType !== 'all' || filterFrom || filterTo) && (
+          <Button variant="ghost" size="sm" onClick={() => { setFilterUser('all'); setFilterType('all'); setFilterFrom(''); setFilterTo(''); }}>
+            Réinitialiser
+          </Button>
+        )}
       </div>
 
-      {/* Log entries */}
+      {/* Log table */}
       <div className="glass-card overflow-x-auto">
         <Table>
           <TableHeader>
@@ -128,7 +157,7 @@ export default function AdminJournal() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredLogs.map(log => {
+            {pageLogs.map(log => {
               const config = actionConfig[log.action_type] || actionConfig.autre;
               const Icon = config.icon;
               return (
@@ -151,13 +180,13 @@ export default function AdminJournal() {
                 </TableRow>
               );
             })}
-            {filteredLogs.length === 0 && (
+            {pageLogs.length === 0 && (
               <TableRow>
                 <TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
                   <div className="flex flex-col items-center gap-2">
                     <FileText className="h-10 w-10 text-muted-foreground/30" />
                     <p className="font-heading font-semibold">Aucune activité enregistrée</p>
-                    <p className="text-sm">Les actions du Staff apparaîtront ici automatiquement</p>
+                    <p className="text-sm">Les actions apparaîtront ici automatiquement</p>
                   </div>
                 </TableCell>
               </TableRow>
@@ -165,6 +194,33 @@ export default function AdminJournal() {
           </TableBody>
         </Table>
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted-foreground font-body">
+            Page {page} sur {totalPages} · {filteredLogs.length} entrées
+          </p>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+              const p = page <= 3 ? i + 1 : page + i - 2;
+              if (p < 1 || p > totalPages) return null;
+              return (
+                <Button key={p} variant={p === page ? 'default' : 'outline'} size="sm" onClick={() => setPage(p)}
+                  style={p === page ? { backgroundColor: '#03045E' } : {}}>
+                  {p}
+                </Button>
+              );
+            })}
+            <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

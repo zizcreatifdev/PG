@@ -535,24 +535,49 @@ export default function AdminShootings() {
 
         {/* ── Image bank ── */}
         <TabsContent value="banque">
-          <div className="glass-card p-6">
+          <div className="glass-card p-6 space-y-4">
+            {/* Compteur + alerte */}
+            {filterClient !== 'all' && (() => {
+              const client = clients.find(c => c.id === filterClient);
+              const dispo = filteredImages.filter(img => !img.used_in_post_id).length;
+              const seuil = client?.seuil_alerte_images ?? 5;
+              return (
+                <div className={`flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-body ${dispo <= seuil ? 'border' : ''}`}
+                  style={dispo <= seuil
+                    ? { backgroundColor: '#FAEEDA', borderColor: '#BA7517', color: '#BA7517' }
+                    : { backgroundColor: '#F0FDF4', color: '#16A34A' }}>
+                  {dispo <= seuil ? <AlertTriangle className="h-4 w-4 shrink-0" /> : <Image className="h-4 w-4 shrink-0" />}
+                  <span><strong>{dispo}</strong> image{dispo !== 1 ? 's' : ''} disponible{dispo !== 1 ? 's' : ''}
+                    {dispo <= seuil && ` — stock bas (seuil : ${seuil})`}
+                  </span>
+                </div>
+              );
+            })()}
             {filteredImages.length === 0 ? (
-              <p className="text-center text-muted-foreground font-body py-12">Aucune image dans la banque</p>
+              <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
+                <Image className="h-10 w-10 opacity-30" />
+                <p className="font-body text-sm">Aucune image dans la banque</p>
+              </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
                 {filteredImages.map(img => {
                   const client = clients.find(c => c.id === img.client_id);
+                  const isUsed = !!img.used_in_post_id;
                   return (
-                    <div key={img.id} className="relative group rounded-xl overflow-hidden border border-border/50">
+                    <div key={img.id} className="relative rounded-xl overflow-hidden border border-border/50 group">
                       <img src={img.image_url} alt="" className="w-full aspect-square object-cover" />
+                      {/* Always-visible badge */}
+                      <div className="absolute top-1.5 left-1.5">
+                        <span className="text-[9px] px-1.5 py-0.5 rounded-full font-heading font-bold border"
+                          style={isUsed
+                            ? { backgroundColor: '#EAF3DE', color: '#1D9E75', borderColor: '#1D9E75' }
+                            : { backgroundColor: '#E0F2FE', color: '#0077B6', borderColor: '#0077B6' }}>
+                          {isUsed ? 'Utilisée' : 'Disponible'}
+                        </span>
+                      </div>
                       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition flex items-end">
                         <div className="p-2 opacity-0 group-hover:opacity-100 transition w-full">
                           <p className="text-white text-[10px] font-body truncate">{client?.nom}</p>
-                          {img.used_in_post_id && (
-                            <Badge className="text-[9px] px-1.5 py-0 border-0 mt-0.5" style={{ backgroundColor: '#EAF3DE', color: '#1D9E75' }}>
-                              Utilisée
-                            </Badge>
-                          )}
                         </div>
                       </div>
                     </div>
