@@ -342,7 +342,8 @@ export default function AdminComptabilite() {
 
   // Modals
   const [paymentModal, setPaymentModal] = useState<{ open: boolean; clientId: string }>({ open: false, clientId: '' });
-  const [relanceModal, setRelanceModal] = useState<{ open: boolean; client: Client | null }>({ open: false, client: null });
+  const [relanceModal, setRelanceModal] = useState<{ open: boolean; client: Client | null; invoice: Invoice | null; joursRetard: number }>({ open: false, client: null, invoice: null, joursRetard: 0 });
+  const [sendingRelance, setSendingRelance] = useState(false);
   const [expenseModal, setExpenseModal] = useState(false);
   const [invoiceModal, setInvoiceModal] = useState<{ open: boolean; clientId: string }>({ open: false, clientId: '' });
 
@@ -373,7 +374,19 @@ export default function AdminComptabilite() {
     setFormules((fm as Formule[]) || []);
     setPayments(pay || []);
     setExpenses((exp as Expense[]) || []);
-    setInvoices((inv as Invoice[]) || []);
+
+    // Auto-mark overdue invoices
+    const today = new Date().toISOString().split('T')[0];
+    const rawInvoices = (inv as Invoice[]) || [];
+    const overdueIds = rawInvoices
+      .filter(i => i.date_echeance < today && !['paye', 'payee', 'en_retard'].includes(i.statut))
+      .map(i => i.id);
+    if (overdueIds.length > 0) {
+      await supabase.from('invoices').update({ statut: 'en_retard' }).in('id', overdueIds);
+      setInvoices(rawInvoices.map(i => overdueIds.includes(i.id) ? { ...i, statut: 'en_retard' } : i));
+    } else {
+      setInvoices(rawInvoices);
+    }
     setInvoiceLines(il || []);
   };
 
@@ -498,25 +511,55 @@ export default function AdminComptabilite() {
     load();
   };
 
-  const handleRelance = async () => {
-    if (!relanceModal.client) { toast.error('Client introuvable'); return; }
-    const { data: clientData } = await supabase.from('clients').select('user_id').eq('id', relanceModal.client.id).single();
-    if (!clientData?.user_id) { toast.error('Client sans compte'); return; }
-    const { error } = await supabase.from('notifications').insert({
-      user_id: clientData.user_id,
-      title: 'Rappel de paiement',
-      message: relanceMessage,
-    });
-    if (error) { toast.error('Erreur envoi'); return; }
-    toast.success('Relance envoyée');
-    setRelanceModal({ open: false, client: null });
+  const handleRelanceEmail = async () => {
+    if (!relanceModal.client?.email) { toast.error('Email client introuvable'); return; }
+    setSendingRelance(true);
+    try {
+      const session = (await supabase.auth.getSession()).data.session;
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-relance-email`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({
+          email: relanceModal.client.email,
+          nom: relanceModal.client.nom,
+          message: relanceMessage,
+        }),
+      });
+      if (!res.ok) throw new Error('Erreur réseau');
+      toast.success('Email de relance envoyé');
+      setRelanceModal({ open: false, client: null, invoice: null, joursRetard: 0 });
+    } catch {
+      toast.error('Erreur envoi email');
+    }
+    setSendingRelance(false);
+  };
+
+  const copyRelanceMessage = () => {
+    navigator.clipboard.writeText(relanceMessage);
+    toast.success('Message copié');
   };
 
   const openRelance = (client: Client) => {
     const retard = getRetardJours(client.id);
     const montant = getClientMontant(client);
-    setRelanceMessage(`Bonjour ${client.nom.split(' ')[0]}, nous n'avons pas encore reçu votre règlement de ${formatXOF(montant)} avec ${retard} jours de retard. Merci de régulariser votre situation dans les meilleurs délais.`);
-    setRelanceModal({ open: true, client });
+    const prenom = client.nom.split(' ')[0];
+    const mois = new Date().toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+    setRelanceMessage(`Bonjour ${prenom},\n\nVotre paiement de ${formatXOF(montant)} XOF pour la période ${mois} est en retard de ${retard} jour${retard > 1 ? 's' : ''}.\n\nMerci de régulariser votre situation dans les meilleurs délais.\n\nCordialement,\nL'équipe Persona Genius`);
+    setRelanceModal({ open: true, client, invoice: null, joursRetard: retard });
+  };
+
+  const openRelanceFromInvoice = (inv: Invoice) => {
+    const client = clients.find(c => c.id === inv.client_id);
+    if (!client) return;
+    const joursRetard = Math.max(0, Math.floor((Date.now() - new Date(inv.date_echeance).getTime()) / 86400000));
+    const mois = new Date(inv.date_echeance).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+    const prenom = client.nom.split(' ')[0];
+    setRelanceMessage(`Bonjour ${prenom},\n\nVotre paiement de ${formatXOF(inv.montant_xof)} XOF pour la période ${mois} est en retard de ${joursRetard} jour${joursRetard > 1 ? 's' : ''}.\n\nMerci de régulariser votre situation dans les meilleurs délais.\n\nCordialement,\nL'équipe Persona Genius`);
+    setRelanceModal({ open: true, client, invoice: inv, joursRetard });
   };
 
   const generatePdf = async (clientId: string) => {
@@ -534,14 +577,14 @@ export default function AdminComptabilite() {
     // Auto-create invoice if none exists
     if (!inv) {
       const now = new Date();
-      const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
-      // Sequential numbering: FAC-YYYYMM-0001
-      const monthInvoices = invoices.filter(i => i.numero.includes(`FAC-${ym}-`));
-      const maxSeq = monthInvoices.reduce((max, i) => {
+      const year = now.getFullYear();
+      // Sequential numbering: PG-YYYY-NNN (based on total invoice count)
+      const yearInvoices = invoices.filter(i => i.numero.startsWith(`PG-${year}-`) || i.numero.includes(`FAC-${year}`));
+      const maxSeq = yearInvoices.reduce((max, i) => {
         const seq = parseInt(i.numero.split('-').pop() || '0');
         return seq > max ? seq : max;
       }, 0);
-      const numero = `FAC-${ym}-${String(maxSeq + 1).padStart(4, '0')}`;
+      const numero = `PG-${year}-${String(maxSeq + 1).padStart(3, '0')}`;
       const echeance = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate()).toISOString().split('T')[0];
 
       const { data: newInv, error: invErr } = await supabase.from('invoices').insert({
@@ -854,12 +897,19 @@ export default function AdminComptabilite() {
                       <TableCell className="font-body text-sm">{new Date(inv.date_emission).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}</TableCell>
                       <TableCell className="font-body text-sm">{new Date(inv.date_echeance).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}</TableCell>
                       <TableCell className="text-right">
-                        <Button size="sm" variant="outline" onClick={() => {
-                          const client = clients.find(c => c.id === inv.client_id);
-                          if (client) generatePdf(client.id);
-                        }}>
-                          <FileDown className="h-3 w-3 mr-1" /> PDF
-                        </Button>
+                        <div className="flex items-center justify-end gap-1">
+                          {(inv.statut === 'en_retard' || inv.statut === 'en_attente') && inv.statut !== 'payee' && (
+                            <Button size="sm" variant="outline" className="border-destructive text-destructive hover:bg-red-50" onClick={() => openRelanceFromInvoice(inv)}>
+                              <Send className="h-3 w-3 mr-1" /> Relancer
+                            </Button>
+                          )}
+                          <Button size="sm" variant="outline" onClick={() => {
+                            const client = clients.find(c => c.id === inv.client_id);
+                            if (client) generatePdf(client.id);
+                          }}>
+                            <FileDown className="h-3 w-3 mr-1" /> PDF
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
@@ -902,13 +952,44 @@ export default function AdminComptabilite() {
 
       {/* Relance Modal */}
       <Dialog open={relanceModal.open} onOpenChange={o => setRelanceModal({ ...relanceModal, open: o })}>
-        <DialogContent>
-          <DialogHeader><DialogTitle className="font-heading">Relancer {relanceModal.client?.nom}</DialogTitle></DialogHeader>
-          <div className="space-y-4 mt-4">
-            <Textarea value={relanceMessage} onChange={e => setRelanceMessage(e.target.value)} rows={5} />
-            <Button onClick={handleRelance} className="w-full" style={{ backgroundColor: '#DC2626' }}>
-              <Send className="h-4 w-4 mr-2" /> Envoyer la relance
-            </Button>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="font-heading">Relancer {relanceModal.client?.nom}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            {relanceModal.joursRetard > 0 && (
+              <div className="flex items-center gap-2 rounded-lg px-4 py-3 text-sm font-medium" style={{ backgroundColor: '#FEF2F2', color: '#DC2626' }}>
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                Retard de <strong>{relanceModal.joursRetard} jour{relanceModal.joursRetard > 1 ? 's' : ''}</strong>
+                {relanceModal.invoice && ` — ${formatXOF(relanceModal.invoice.montant_xof)} XOF`}
+              </div>
+            )}
+            {relanceModal.client?.email && (
+              <p className="text-sm text-muted-foreground">Destinataire : <strong>{relanceModal.client.email}</strong></p>
+            )}
+            <Textarea
+              value={relanceMessage}
+              onChange={e => setRelanceMessage(e.target.value)}
+              rows={7}
+              className="font-body text-sm"
+            />
+            <div className="flex gap-2">
+              <Button
+                onClick={handleRelanceEmail}
+                disabled={sendingRelance || !relanceModal.client?.email}
+                className="flex-1"
+                style={{ backgroundColor: '#DC2626', color: 'white' }}
+              >
+                <Send className="h-4 w-4 mr-2" />
+                {sendingRelance ? 'Envoi…' : 'Envoyer par email'}
+              </Button>
+              <Button variant="outline" onClick={copyRelanceMessage} className="gap-2">
+                Copier
+              </Button>
+            </div>
+            {!relanceModal.client?.email && (
+              <p className="text-xs text-muted-foreground">Ce client n'a pas d'email enregistré.</p>
+            )}
           </div>
         </DialogContent>
       </Dialog>

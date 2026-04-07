@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
-import { Eye, Download, UserPlus, X, Plus, Trash2, Edit2, GripVertical } from 'lucide-react';
+import { Eye, Download, UserPlus, X, Plus, Trash2, Edit2, GripVertical, Send, Copy, Check } from 'lucide-react';
 
 const formatXOF = (n: number) => n.toLocaleString('fr-FR').replace(/\u202f/g, ' ').replace(/\u00a0/g, ' ');
 const statusColors: Record<string, { bg: string; text: string; label: string }> = {
@@ -32,6 +32,9 @@ export default function AdminContrats() {
   const [newFeature, setNewFeature] = useState('');
   const [confirmReject, setConfirmReject] = useState<any>(null);
   const [confirmDeleteFormule, setConfirmDeleteFormule] = useState<any>(null);
+  const [sendingContrat, setSendingContrat] = useState<string | null>(null);
+  const [convertingClient, setConvertingClient] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const load = async () => {
     const [s, t, f] = await Promise.all([
@@ -47,21 +50,63 @@ export default function AdminContrats() {
   useEffect(() => { load(); }, []);
 
   const convertToClient = async (sub: any) => {
+    setConvertingClient(sub.id);
     try {
-      const { data, error } = await supabase.from('clients').insert({
-        nom: `${sub.prenom} ${sub.nom}`,
-        email: sub.email,
-        titre_professionnel: sub.profession,
-        linkedin_url: sub.linkedin_url,
-        whatsapp: sub.whatsapp,
-        formule: sub.formule_name?.toLowerCase() || 'essentiel',
-        statut: 'actif' as any,
-      }).select('id').single();
-      if (error) throw error;
-      await supabase.from('prospect_submissions').update({ status: 'converti' as any, client_id: data.id }).eq('id', sub.id);
-      toast.success('Fiche client créée');
+      const session = (await supabase.auth.getSession()).data.session;
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/convert-to-client`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({ submission_id: sub.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erreur serveur');
+      toast.success('Client créé et email de bienvenue envoyé');
       load();
-    } catch (err: any) { toast.error(err.message); }
+    } catch (err: any) {
+      toast.error(err.message || 'Erreur conversion');
+    }
+    setConvertingClient(null);
+  };
+
+  const sendContrat = async (sub: any) => {
+    setSendingContrat(sub.id);
+    try {
+      const session = (await supabase.auth.getSession()).data.session;
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-contrat-email`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({
+          email: sub.email,
+          prenom: sub.prenom,
+          nom: sub.nom,
+          formule_name: sub.formule_name,
+          submission_id: sub.id,
+          app_url: window.location.origin,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erreur serveur');
+      toast.success('Email de contrat envoyé');
+    } catch (err: any) {
+      toast.error(err.message || 'Erreur envoi email');
+    }
+    setSendingContrat(null);
+  };
+
+  const copyContratLink = (sub: any) => {
+    const link = `${window.location.origin}/contrat/${sub.id}`;
+    navigator.clipboard.writeText(link);
+    setCopiedId(sub.id);
+    toast.success('Lien copié');
+    setTimeout(() => setCopiedId(null), 2000);
   };
 
   const doReject = async (sub: any) => {
@@ -142,12 +187,45 @@ export default function AdminContrats() {
                       <TableCell><span className="px-2.5 py-1 rounded-full text-xs font-display font-semibold" style={{ backgroundColor: st.bg, color: st.text }}>{st.label}</span></TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1 flex-wrap">
-                          <Button variant="ghost" size="sm" onClick={() => setViewSub(s)}><Eye className="h-4 w-4" /></Button>
-                          {s.status === 'signed' && (
-                            <Button variant="ghost" size="sm" onClick={() => convertToClient(s)}><UserPlus className="h-4 w-4" /></Button>
+                          <Button variant="ghost" size="sm" title="Voir les détails" onClick={() => setViewSub(s)}>
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          {(s.status === 'en_attente' || s.status === 'signed') && (
+                            <Button
+                              variant="ghost" size="sm"
+                              title="Envoyer le contrat par email"
+                              disabled={sendingContrat === s.id}
+                              onClick={() => sendContrat(s)}
+                            >
+                              {sendingContrat === s.id
+                                ? <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
+                                : <Send className="h-4 w-4" />
+                              }
+                            </Button>
                           )}
                           {(s.status === 'en_attente' || s.status === 'signed') && (
-                            <Button variant="ghost" size="sm" onClick={() => setConfirmReject(s)} className="text-destructive"><X className="h-4 w-4" /></Button>
+                            <Button variant="ghost" size="sm" title="Copier le lien du contrat" onClick={() => copyContratLink(s)}>
+                              {copiedId === s.id ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+                            </Button>
+                          )}
+                          {s.status === 'signed' && (
+                            <Button
+                              variant="ghost" size="sm"
+                              title="Convertir en client"
+                              disabled={convertingClient === s.id}
+                              onClick={() => convertToClient(s)}
+                              style={{ color: '#03045E' }}
+                            >
+                              {convertingClient === s.id
+                                ? <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
+                                : <UserPlus className="h-4 w-4" />
+                              }
+                            </Button>
+                          )}
+                          {(s.status === 'en_attente' || s.status === 'signed') && (
+                            <Button variant="ghost" size="sm" title="Rejeter" onClick={() => setConfirmReject(s)} className="text-destructive">
+                              <X className="h-4 w-4" />
+                            </Button>
                           )}
                         </div>
                       </TableCell>

@@ -122,6 +122,7 @@ export default function AdminDashboard() {
     postsPrevus: 0,
     postsEnAttente: 0,
     shootingsAplanifier: 0,
+    facturesEnRetard: 0,
   });
   const [loading, setLoading] = useState(true);
 
@@ -137,12 +138,15 @@ export default function AdminDashboard() {
         .toISOString()
         .split('T')[0];
 
+      const today = now.toISOString().split('T')[0];
+
       const [
         { count: clientsActifs },
         { count: postsPublies },
         { count: postsPrevus },
         { count: postsEnAttente },
         { data: stockClients },
+        { count: facturesEnRetard },
       ] = await Promise.all([
         supabase
           .from('clients')
@@ -169,6 +173,11 @@ export default function AdminDashboard() {
           .select('id, stock_images, seuil_alerte_images')
           .eq('statut', 'actif')
           .or('archived.is.null,archived.eq.false'),
+        supabase
+          .from('invoices')
+          .select('*', { count: 'exact', head: true })
+          .lt('date_echeance', today)
+          .not('statut', 'in', '("paye","payee","en_retard")'),
       ]);
 
       const shootingsCount = (stockClients || []).filter(
@@ -181,6 +190,7 @@ export default function AdminDashboard() {
         postsPrevus: postsPrevus || 0,
         postsEnAttente: postsEnAttente || 0,
         shootingsAplanifier: shootingsCount,
+        facturesEnRetard: facturesEnRetard || 0,
       });
       setLoading(false);
     }
@@ -232,9 +242,21 @@ export default function AdminDashboard() {
             Voici l'état de votre activité aujourd'hui
           </p>
         </div>
-        <a href="/" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-display font-semibold transition hover:opacity-90 shadow-sm" style={{ backgroundColor: '#03045E', color: 'white' }}>
-          <Globe className="h-4 w-4" /> Voir la landing page
-        </a>
+        <div className="flex items-center gap-3 flex-wrap justify-end">
+          {stats.facturesEnRetard > 0 && (
+            <a
+              href="/admin/facturation"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-display font-semibold animate-pulse"
+              style={{ backgroundColor: '#FEF2F2', color: '#DC2626', border: '1px solid #FCA5A5' }}
+            >
+              <AlertTriangle className="h-4 w-4" />
+              {stats.facturesEnRetard} facture{stats.facturesEnRetard > 1 ? 's' : ''} en retard
+            </a>
+          )}
+          <a href="/" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-display font-semibold transition hover:opacity-90 shadow-sm" style={{ backgroundColor: '#03045E', color: 'white' }}>
+            <Globe className="h-4 w-4" /> Voir la landing page
+          </a>
+        </div>
       </div>
 
       {/* KPIs */}

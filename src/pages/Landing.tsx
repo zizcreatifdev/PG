@@ -48,6 +48,8 @@ export default function Landing() {
   const [subtitle, setSubtitle] = useState('Persona Genius accompagne les dirigeants, avocats et entrepreneurs africains dans leur stratégie de contenu LinkedIn — de la rédaction au shooting photo.');
   const [ctaText, setCtaText] = useState('Je démarre');
   const [ctaFinalText, setCtaFinalText] = useState('Prêt à développer votre marque personnelle ?');
+  const [agencyEmail, setAgencyEmail] = useState('hello@personagenius.com');
+  const [agencyName, setAgencyName] = useState('Persona Genius');
 
   // Form state
   const [selectedFormuleId, setSelectedFormuleId] = useState('');
@@ -57,10 +59,15 @@ export default function Landing() {
 
   useEffect(() => {
     (async () => {
-      const [formulesRes, configRes] = await Promise.all([
+      const [formulesRes, configRes, agencyRes] = await Promise.all([
         supabase.from('formules').select('*').eq('actif', true).eq('afficher_landing', true).order('prix_xof'),
         supabase.from('landing_page_config').select('*').limit(1).single(),
+        supabase.from('agency_settings').select('nom, email').limit(1).single(),
       ]);
+      if (agencyRes.data) {
+        if (agencyRes.data.email) setAgencyEmail(agencyRes.data.email);
+        if (agencyRes.data.nom) setAgencyName(agencyRes.data.nom);
+      }
       if (formulesRes.data && formulesRes.data.length > 0) setFormules(formulesRes.data as Formule[]);
       if (configRes.data) {
         const c = configRes.data.content as any;
@@ -109,9 +116,22 @@ export default function Landing() {
       }).select('id').single();
 
       if (error) throw error;
-      if (data?.id) {
-        navigate(`/contrat/${data.id}`);
-      }
+
+      // Notify admins
+      try {
+        const { data: admins } = await supabase.from('user_roles').select('user_id').eq('role', 'admin');
+        if (admins) {
+          for (const admin of admins) {
+            await supabase.from('notifications').insert({
+              user_id: admin.user_id,
+              title: '📬 Nouvelle demande reçue',
+              message: `${form.prenom} ${form.nom} a soumis une demande (${selectedFormule ? formules.find(f => f.id === selectedFormuleId)?.nom : 'Formule non précisée'})`,
+            });
+          }
+        }
+      } catch { /* ignore */ }
+
+      navigate('/confirmation');
     } catch (err: any) {
       toast.error(err.message || 'Erreur lors de la soumission');
     }
@@ -259,6 +279,28 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* SECTION 4b — POURQUOI NOUS */}
+      <section className="py-16 sm:py-20 px-4 sm:px-6" style={{ background: 'linear-gradient(135deg, #03045E 0%, #023E8A 100%)' }}>
+        <div className="max-w-5xl mx-auto">
+          <h2 className="font-display text-3xl sm:text-4xl font-bold text-white text-center mb-3">Pourquoi choisir Persona Genius ?</h2>
+          <p className="text-center text-white/60 text-sm mb-14">Ce qui nous distingue des autres agences</p>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            {[
+              { icon: '🏆', title: 'Expert LinkedIn', desc: "Spécialisés exclusivement sur LinkedIn, nous maîtrisons les algorithmes et codes de la plateforme." },
+              { icon: '✍️', title: 'Contenu premium', desc: "Chaque post est rédigé sur-mesure par des copywriters formés au personal branding africain." },
+              { icon: '📸', title: 'Shooting inclus', desc: "Photos professionnelles adaptées à votre secteur, incluses dans nos formules premium." },
+              { icon: '📈', title: 'Résultats mesurés', desc: "Suivi de vos KPIs : portée, impressions, abonnés gagnés chaque mois." },
+            ].map((item, i) => (
+              <div key={i} className="rounded-2xl p-6 text-center" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}>
+                <div className="text-4xl mb-4">{item.icon}</div>
+                <h3 className="font-display text-base font-bold text-white mb-2">{item.title}</h3>
+                <p className="text-white/60 text-sm leading-relaxed">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* SECTION 5 — FORMULAIRE D'INSCRIPTION */}
       <section id="inscription" ref={inscriptionRef} className="py-16 sm:py-20 px-4 sm:px-6" style={{ backgroundColor: '#EEF1F8' }}>
         <div className="max-w-2xl mx-auto">
@@ -377,8 +419,8 @@ export default function Landing() {
             <span className="font-display text-xs font-bold tracking-wide uppercase" style={{ color: '#03045E' }}>Persona Genius</span>
           </div>
           <div className="text-center sm:text-right">
-            <p className="text-xs text-muted-foreground">hello@personagenius.com</p>
-            <p className="text-xs text-muted-foreground mt-1">© {new Date().getFullYear()} Persona Genius — Dakar, Sénégal</p>
+            <p className="text-xs text-muted-foreground">{agencyEmail}</p>
+            <p className="text-xs text-muted-foreground mt-1">© {new Date().getFullYear()} {agencyName} — Dakar, Sénégal</p>
           </div>
         </div>
       </footer>
