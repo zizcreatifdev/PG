@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Plus, Trash2, Save, Check, ArrowRight, ExternalLink, Settings2 } from 'lucide-react';
+import { Plus, Trash2, Save, Check, ArrowRight, ExternalLink, Settings2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 
 type Testimonial = { nom: string; titre: string; texte: string };
@@ -19,6 +19,7 @@ type LandingConfig = {
   cta_final_text: string;
   testimonials: Testimonial[];
   faq: FaqItem[];
+  hero_image_url?: string;
 };
 
 type DBFormule = {
@@ -58,6 +59,8 @@ export default function AdminLandingEditor() {
   const [configId, setConfigId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [formules, setFormules] = useState<DBFormule[]>([]);
+  const [heroImageUrl, setHeroImageUrl] = useState<string>('');
+  const [uploadingHero, setUploadingHero] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -77,6 +80,7 @@ export default function AdminLandingEditor() {
             testimonials: content.testimonials?.length ? content.testimonials : defaultConfig.testimonials,
             faq: content.faq?.length ? content.faq : defaultConfig.faq,
           });
+          setHeroImageUrl(content.hero_image_url || '');
         }
       }
       if (formulesRes.data) setFormules(formulesRes.data as DBFormule[]);
@@ -86,15 +90,16 @@ export default function AdminLandingEditor() {
   const save = async () => {
     setSaving(true);
     try {
+      const contentToSave = { ...config, hero_image_url: heroImageUrl };
       if (configId) {
         const { error } = await supabase.from('landing_page_config').update({
-          content: config as any,
+          content: contentToSave as any,
           updated_by: user?.id,
         }).eq('id', configId);
         if (error) throw error;
       } else {
         const { error } = await supabase.from('landing_page_config').insert({
-          content: config as any,
+          content: contentToSave as any,
           updated_by: user?.id,
         });
         if (error) throw error;
@@ -104,6 +109,29 @@ export default function AdminLandingEditor() {
       toast.error('Erreur de sauvegarde');
     }
     setSaving(false);
+  };
+
+  const handleHeroImageUpload = async (file: File) => {
+    setUploadingHero(true);
+    try {
+      const ext = file.name.split('.').pop();
+      const path = `hero/hero-image.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from('landing-assets')
+        .upload(path, file, { upsert: true });
+      if (upErr) throw upErr;
+      const { data: urlData } = supabase.storage.from('landing-assets').getPublicUrl(path);
+      setHeroImageUrl(urlData.publicUrl);
+      toast.success('Image uploadée !');
+    } catch {
+      toast.error("Erreur lors de l'upload");
+    }
+    setUploadingHero(false);
+  };
+
+  const handleHeroImageDelete = async () => {
+    setHeroImageUrl('');
+    toast.success('Image supprimée');
   };
 
   const addTestimonial = () => setConfig({ ...config, testimonials: [...config.testimonials, { nom: '', titre: '', texte: '' }] });
@@ -145,6 +173,32 @@ export default function AdminLandingEditor() {
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* ─── LEFT: EDITOR ─── */}
         <div className="space-y-6">
+          {/* Hero Image */}
+          <div className="glass-card p-5 space-y-4">
+            <h3 className="font-display font-semibold text-foreground">🖼️ Image Hero</h3>
+            {heroImageUrl ? (
+              <div className="space-y-3">
+                <img src={heroImageUrl} alt="Hero" className="w-full rounded-xl object-cover max-h-48" />
+                <Button variant="outline" size="sm" onClick={handleHeroImageDelete} className="gap-2 text-destructive border-destructive/30 hover:bg-destructive/5">
+                  <Trash2 className="h-3.5 w-3.5" /> Supprimer l'image
+                </Button>
+              </div>
+            ) : (
+              <div className="border-2 border-dashed border-border rounded-xl p-8 text-center">
+                <Upload className="h-8 w-8 mx-auto mb-3 opacity-30" />
+                <p className="text-sm text-muted-foreground mb-3">Aucune image hero uploadée</p>
+                <label className="cursor-pointer">
+                  <span className="px-4 py-2 rounded-lg text-sm font-display font-semibold text-white" style={{ backgroundColor: '#0077B6' }}>
+                    {uploadingHero ? 'Upload en cours…' : 'Choisir une image'}
+                  </span>
+                  <input type="file" accept="image/*" className="hidden" disabled={uploadingHero}
+                    onChange={e => { if (e.target.files?.[0]) handleHeroImageUpload(e.target.files[0]); }} />
+                </label>
+              </div>
+            )}
+            <p className="text-[11px] text-muted-foreground">Format recommandé : JPG ou PNG, ratio 16:9, min 1280×720px.</p>
+          </div>
+
           {/* Hero */}
           <div className="glass-card p-5 space-y-4">
             <h3 className="font-display font-semibold text-foreground">🎯 Hero</h3>
