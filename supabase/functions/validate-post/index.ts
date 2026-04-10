@@ -31,13 +31,13 @@ Deno.serve(async (req) => {
       .single();
 
     if (tokenErr || !tokenData) {
-      return new Response(JSON.stringify({ valid: false, reason: 'Lien invalide' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ valid: false, reason: 'Lien invalide ou expiré' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
     if (tokenData.used) {
       return new Response(JSON.stringify({ valid: false, reason: 'Ce lien a déjà été utilisé' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
     if (new Date(tokenData.expires_at) < new Date()) {
-      return new Response(JSON.stringify({ valid: false, reason: 'Ce lien a expiré (7 jours)' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ valid: false, reason: 'Ce lien a expiré' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     // Fetch post + client info
@@ -58,7 +58,7 @@ Deno.serve(async (req) => {
   if (req.method === 'POST') {
     try {
       const body = await req.json();
-      const { token, action, contenu, comment } = body;
+      const { token, action, commentaire } = body;
 
       if (!token || !action) {
         return new Response(JSON.stringify({ error: 'Paramètres manquants' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -84,42 +84,61 @@ Deno.serve(async (req) => {
         .eq('id', postId)
         .single();
 
-      const clientName = (post?.clients as any)?.nom || 'Client';
-      const postPreview = (post?.contenu || '').slice(0, 50);
+      const clientName = (post?.clients as any)?.nom || 'Le client';
+      const postPreview = (post?.contenu || '').slice(0, 60);
 
-      if (action === 'approve') {
-        await supabaseAdmin.from('posts').update({ statut: 'approuve' }).eq('id', postId);
-        // Mark token as used
+      let notifTitle = '';
+      let notifMessage = '';
+
+      if (action === 'validate') {
+        // ✅ Valider → statut = valide
+        await supabaseAdmin
+          .from('posts')
+          .update({ statut: 'valide', date_validation: new Date().toISOString() } as any)
+          .eq('id', postId);
         await supabaseAdmin.from('post_validation_tokens').update({ used: true }).eq('id', tokenData.id);
-      } else if (action === 'modify' && contenu) {
-        await supabaseAdmin.from('posts').update({ statut: 'modifie', contenu }).eq('id', postId);
+        notifTitle = `✅ ${clientName} a validé un post`;
+        notifMessage = `"${postPreview}…" a été validé et peut être publié.`;
+      } else if (action === 'request_modification') {
+        // ✏️ Demander modification → statut = modifie + commentaire_client
+        if (!commentaire || !commentaire.trim()) {
+          return new Response(JSON.stringify({ error: 'Commentaire requis' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+        await supabaseAdmin
+          .from('posts')
+          .update({ statut: 'modifie', commentaire_client: commentaire.trim() } as any)
+          .eq('id', postId);
         await supabaseAdmin.from('post_validation_tokens').update({ used: true }).eq('id', tokenData.id);
-      } else if (action === 'comment' && comment) {
-        // Don't mark as used for comments — allow further actions
+        notifTitle = `✏️ ${clientName} demande une modification`;
+        notifMessage = `Demande : "${commentaire.trim().slice(0, 80)}…"`;
+      } else if (action === 'refuse') {
+        // ❌ Refuser → statut = brouillon
+        await supabaseAdmin.from('posts').update({ statut: 'brouillon' }).eq('id', postId);
+        await supabaseAdmin.from('post_validation_tokens').update({ used: true }).eq('id', tokenData.id);
+        notifTitle = `❌ ${clientName} a refusé un post`;
+        notifMessage = `Le post "${postPreview}…" a été refusé et repassé en brouillon.`;
       } else {
         return new Response(JSON.stringify({ error: 'Action invalide' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
 
-      // Notify all admins
-      const { data: adminRoles } = await supabaseAdmin.from('user_roles').select('user_id').eq('role', 'admin');
-      if (adminRoles) {
-        const title = action === 'approve' ? 'Post approuvé par le client'
-          : action === 'modify' ? 'Post modifié par le client'
-          : 'Commentaire sur un post';
-        const message = action === 'comment'
-          ? `${clientName} a commenté : "${comment}" sur le post "${postPreview}..."`
-          : `${clientName} a ${action === 'approve' ? 'approuvé' : 'modifié'} le post "${postPreview}..."`;
+      // Notify all admins + staff
+      const { data: adminStaffRoles } = await supabaseAdmin
+        .from('user_roles')
+        .select('user_id')
+        .in('role', ['admin', 'staff']);
 
-        const notifications = adminRoles.map((r: any) => ({
+      if (adminStaffRoles && notifTitle) {
+        const notifications = adminStaffRoles.map((r: any) => ({
           user_id: r.user_id,
-          title,
-          message,
+          title: notifTitle,
+          message: notifMessage,
         }));
         await supabaseAdmin.from('notifications').insert(notifications);
       }
 
       return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     } catch (err) {
+      console.error(err);
       return new Response(JSON.stringify({ error: 'Erreur serveur' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
   }

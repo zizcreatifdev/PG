@@ -20,11 +20,11 @@ Deno.serve(async (req) => {
     }
 
     const subject = is_correction
-      ? `✏️ Mise à jour de votre fiche — PersonaGenius`
-      : `🎉 Bienvenue chez PersonaGenius — Complétez votre fiche`;
+      ? `Mise à jour de votre fiche — Persona Genius`
+      : `Complétez votre fiche Persona Genius`;
 
     const intro = is_correction
-      ? `Votre équipe PersonaGenius souhaite mettre à jour votre fiche. Merci de compléter à nouveau le formulaire en cliquant sur le bouton ci-dessous.`
+      ? `Votre équipe Persona Genius souhaite mettre à jour votre fiche. Merci de compléter à nouveau le formulaire en cliquant sur le bouton ci-dessous.`
       : `Bienvenue ! Nous sommes ravis de vous accompagner dans votre personal branding LinkedIn. Pour démarrer, merci de remplir votre fiche client.`;
 
     const html = `<!DOCTYPE html>
@@ -35,23 +35,23 @@ Deno.serve(async (req) => {
     <tr><td align="center">
       <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
         <tr><td style="background:#03045E;padding:24px 32px;">
-          <p style="margin:0;color:#ffffff;font-size:20px;font-weight:700;">PersonaGenius</p>
+          <p style="margin:0;color:#ffffff;font-size:20px;font-weight:700;letter-spacing:-0.5px;">Persona Genius</p>
           <p style="margin:4px 0 0;color:rgba(255,255,255,0.6);font-size:12px;text-transform:uppercase;letter-spacing:1px;">Personal Branding LinkedIn</p>
         </td></tr>
         <tr><td style="padding:32px;">
           <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#03045E;">Bonjour ${client_nom} 👋</p>
           <p style="margin:0 0 20px;font-size:15px;color:#444;line-height:1.6;">${intro}</p>
-          ${is_correction ? `<div style="background:#FAEEDA;border-left:3px solid #D97706;padding:12px 16px;border-radius:4px;margin-bottom:20px;"><p style="margin:0;font-size:13px;color:#D97706;font-weight:600;">✏️ Demande de correction</p><p style="margin:4px 0 0;font-size:13px;color:#7A5228;">Vos informations seront mises à jour avec les nouvelles données que vous fournirez.</p></div>` : ''}
-          <p style="margin:0 0 16px;font-size:14px;color:#666;">Ce lien est valable 24h :</p>
+          ${is_correction ? `<div style="background:#FAEEDA;border-left:3px solid #D97706;padding:12px 16px;border-radius:4px;margin-bottom:20px;"><p style="margin:0;font-size:13px;color:#D97706;font-weight:600;">Demande de correction</p><p style="margin:4px 0 0;font-size:13px;color:#7A5228;">Vos informations seront mises à jour avec les nouvelles données que vous fournirez.</p></div>` : ''}
+          <p style="margin:0 0 16px;font-size:14px;color:#666;">Ce lien est valable 7 jours :</p>
           <table cellpadding="0" cellspacing="0"><tr><td>
             <a href="${onboarding_link}" style="display:inline-block;background:#8FC500;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;padding:14px 28px;border-radius:8px;">
-              ${is_correction ? 'Mettre à jour ma fiche →' : 'Compléter ma fiche →'}
+              ${is_correction ? 'Mettre à jour ma fiche →' : 'Remplir ma fiche →'}
             </a>
           </td></tr></table>
-          <p style="margin:24px 0 0;font-size:12px;color:#999;">Ce lien expire dans 24h. Si vous avez des questions, contactez votre équipe PersonaGenius.</p>
+          <p style="margin:24px 0 0;font-size:12px;color:#999;">Si vous avez des questions, répondez directement à cet email.</p>
         </td></tr>
         <tr><td style="background:#f9f9f9;padding:16px 32px;border-top:1px solid #eee;">
-          <p style="margin:0;font-size:11px;color:#aaa;text-align:center;">PersonaGenius · Personal Branding LinkedIn</p>
+          <p style="margin:0;font-size:11px;color:#aaa;text-align:center;">Persona Genius · Personal Branding LinkedIn · Ce message vous a été envoyé car vous avez été invité à rejoindre Persona Genius.</p>
         </td></tr>
       </table>
     </td></tr>
@@ -63,7 +63,7 @@ Deno.serve(async (req) => {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        from: 'PersonaGenius <noreply@personagenius.fr>',
+        from: 'Persona Genius <onboarding@resend.dev>',
         to: [client_email],
         subject,
         html,
